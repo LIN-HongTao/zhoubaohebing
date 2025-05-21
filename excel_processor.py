@@ -71,11 +71,11 @@ class ExcelProcessor:
             # 表格名称及其正则表达式模式
             table_patterns = [
                 (r"一、\s*逾期还款业务", "一、逾期还款业务"),
-                (r"二、\s*付款逾期未到货\(1\)", "二、付款逾期未到货(1)"),
-                (r"三、\s*付款逾期未到货\(2、集港及在途部分\)", "三、付款逾期未到货(2、集港及在途部分)"),
+                (r"二、\s*付款逾期未到货[\(（]1[\)）]", "二、付款逾期未到货(1)"),
+                (r"三、\s*付款逾期未到货[\(（]2、集港及在途部分[\)）]", "三、付款逾期未到货(2、集港及在途部分)"),
                 (r"四、\s*转口销售逾期未开证", "四、转口销售逾期未开证"),
                 (r"五、\s*签约未到货", "五、签约未到货"),
-                (r"六、\s*逾期未交货/未验收/未退质保金/未结算", "六、逾期未交货/未验收/未退质保金/未结算"),
+                (r"六、\s*逾期未交货[/／]未验收[/／]未退质保金[/／]未结算", "六、逾期未交货/未验收/未退质保金/未结算"),
                 (r"七、\s*投标保证金逾期退还表", "七、投标保证金逾期退还表"),
                 (r"八、\s*现货敞口90天及以上库存", "八、现货敞口90天及以上库存"),
                 (r"九、\s*期现结合90天及以上库存", "九、期现结合90天及以上库存")
@@ -90,10 +90,16 @@ class ExcelProcessor:
                     if re.search(pattern, cell_value):
                         print(f"找到表格标题: {cell_value} 在行 {idx}")
                         # 直接使用Python的整数索引
-                        start_row = idx + 1
-                        start_rows.append((start_row, name))
-                        found = True
-                        break
+                        try:
+                            # 确保idx是整数
+                            idx_int = int(idx) if not isinstance(idx, int) else idx
+                            start_row = idx_int + 1
+                            start_rows.append((start_row, name))
+                            found = True
+                            break
+                        except (ValueError, TypeError):
+                            print(f"警告: 行索引转换为整数失败: {idx}，类型: {type(idx)}")
+                            continue
                 if not found:
                     print(f"警告: 未找到表格 '{name}'")
             
@@ -148,7 +154,7 @@ class ExcelProcessor:
             print(f"正在读取保证金sheet: {self.file_path}")
             sheet_data = pd.read_excel(self.file_path, sheet_name="保证金", header=None)
             
-            # 表格名称及其正则表达式模式
+            # 表格名称及其正则表达式模式 - 已处理兼容全角和半角符号
             table_patterns = [
                 (r"保证金比例低于合同约定比例", "保证金比例低于合同约定比例"),
                 (r"未约定收保证金的锁定业务价格倒挂情况", "未约定收保证金的锁定业务价格倒挂情况")
@@ -164,10 +170,16 @@ class ExcelProcessor:
                         if re.search(pattern, cell_value):
                             print(f"找到保证金表格标题: {cell_value} 在行 {idx}")
                             # 直接使用Python的整数索引
-                            start_row = idx + 1
-                            start_rows.append((start_row, name))
-                            found = True
-                            break
+                            try:
+                                # 确保idx是整数
+                                idx_int = int(idx) if not isinstance(idx, int) else idx
+                                start_row = idx_int + 1
+                                start_rows.append((start_row, name))
+                                found = True
+                                break
+                            except (ValueError, TypeError):
+                                print(f"警告: 行索引转换为整数失败: {idx}，类型: {type(idx)}")
+                                continue
                     if found:
                         break
                 if not found:
@@ -289,6 +301,15 @@ class ExcelProcessor:
                 # 1. 清除所有合计行（通过清除所有合同号为空的行来实现）
                 df = df[df[contract_column].notna()]
                 print(f"已通过'{contract_column}'列过滤合计行，剩余行数: {len(df)}")
+            
+            # 将二级部门为"启宏实业"的数据中的客户列值都改为"启宏实业"
+            if '二级部门' in df.columns and '客户' in df.columns:
+                # 找出二级部门为"启宏实业"的行
+                qihong_mask = df['二级部门'].astype(str).str.contains('启宏实业', na=False)
+                if qihong_mask.any():
+                    # 修改这些行的客户列值
+                    df.loc[qihong_mask, '客户'] = '启宏实业'
+                    print(f"已将{qihong_mask.sum()}行二级部门为'启宏实业'的记录的客户改为'启宏实业'")
             
             # 检查是否有必要的列
             required_columns = ['逾期事由', '金额/万元', '板群', '经营单位', '客户', '产品']
@@ -990,7 +1011,8 @@ class ExcelProcessor:
             for idx, row in sheet_data.iterrows():
                 for j in range(len(row)):
                     cell_value = str(row[j]) if not pd.isna(row[j]) else ""
-                    if table_name in cell_value:
+                    # 兼容全角和半角括号
+                    if "汇总表" in cell_value and ("事业部" in cell_value or "领导" in cell_value):
                         print(f"找到未定价或远期交货业务表格标题: {cell_value} 在行 {idx}")
                         title_row = idx
                         break
@@ -1004,30 +1026,34 @@ class ExcelProcessor:
             # 查找表格头部（列名所在行）
             # 通常在表格标题的下一行或隔一行
             header_row = None
-            for i in range(title_row + 1, title_row + 5):  # 检查标题后的几行
-                if i >= len(sheet_data):
-                    break
-                
-                row = sheet_data.iloc[i]
-                # 检查是否包含常见的列名如"部门"、"供应商/客户"等
-                for col_idx, cell in enumerate(row):
-                    cell_str = str(cell).strip() if not pd.isna(cell) else ""
-                    if cell_str in ["部门", "供应商/客户", "类型", "履约风险值（元）"]:
-                        header_row = i
-                        print(f"找到表格头部在行 {header_row}，列名: {cell_str}")
+            if title_row is not None:
+                title_row_idx = int(title_row)  # 确保title_row为整数
+                for i in range(title_row_idx + 1, title_row_idx + 5):  # 检查标题后的几行
+                    if i >= len(sheet_data):
                         break
-                
-                if header_row is not None:
-                    break
-            
-            if header_row is None:
+                    
+                    row = sheet_data.iloc[i]
+                    # 检查是否包含常见的列名如"部门"、"供应商/客户"等
+                    for col_idx, cell in enumerate(row):
+                        cell_str = str(cell).strip() if not pd.isna(cell) else ""
+                        if cell_str in ["部门", "供应商/客户", "类型", "履约风险值（元）"]:
+                            header_row = i
+                            print(f"找到表格头部在行 {header_row}，列名: {cell_str}")
+                            break
+                    
+                    if header_row is not None:
+                        break
+
+            if header_row is None and title_row is not None:
                 # 如果没有找到明确的表头行，默认使用标题行的下一行
-                header_row = title_row + 1
+                title_row_idx = int(title_row)  # 确保title_row为整数
+                header_row = title_row_idx + 1
                 print(f"未找到明确的表头行，使用默认表头行: {header_row}")
-            
+
             # 表格数据从头部行的下一行开始
-            start_row = header_row + 1
-            print(f"表格数据开始于行: {start_row}")
+            if header_row is not None:
+                start_row = header_row + 1
+                print(f"表格数据开始于行: {start_row}")
             
             # 查找'履约风险值（元）'列的索引
             headers = sheet_data.iloc[header_row].fillna('')
@@ -1161,7 +1187,16 @@ class ExcelProcessor:
                 
             # 2. 填充"类型"列的合并单元格值
             if '类型' in df.columns:
-                df['类型'] = df['类型'].fillna(method='ffill')
+                # 使用可靠的方式填充合并单元格
+                # 先转换成列表处理再转回DataFrame
+                type_values = df['类型'].values
+                last_valid_value = None
+                for i in range(len(type_values)):
+                    if pd.notna(type_values[i]) and str(type_values[i]).strip() != '':
+                        last_valid_value = type_values[i]
+                    elif last_valid_value is not None:
+                        type_values[i] = last_valid_value
+                df['类型'] = type_values
                 print("已填充'类型'列的合并单元格值")
             else:
                 print("警告: 未找到'类型'列")
@@ -1169,8 +1204,16 @@ class ExcelProcessor:
                 type_cols = ['业务类型', '品种类型', '种类']
                 for col in type_cols:
                     if col in df.columns:
+                        # 使用可靠的方式填充合并单元格
+                        type_values = df[col].values
+                        last_valid_value = None
+                        for i in range(len(type_values)):
+                            if pd.notna(type_values[i]) and str(type_values[i]).strip() != '':
+                                last_valid_value = type_values[i]
+                            elif last_valid_value is not None:
+                                type_values[i] = last_valid_value
+                        df[col] = type_values
                         df = df.rename(columns={col: '类型'})
-                        df['类型'] = df['类型'].fillna(method='ffill')
                         print(f"使用替代列 '{col}' 并填充合并单元格值")
                         break
             
